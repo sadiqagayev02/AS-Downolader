@@ -11,6 +11,29 @@ const axios = require('axios');
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+
+const https = require('https');
+const fs = require('fs');
+
+async function downloadYtDlp() {
+  const path = '/tmp/yt-dlp';
+  if (fs.existsSync(path)) return path;
+  
+  return new Promise((resolve, reject) => {
+    const file = fs.createWriteStream(path);
+    https.get('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp', (res) => {
+      res.pipe(file);
+      file.on('finish', () => {
+        file.close();
+        fs.chmodSync(path, 0o755);
+        resolve(path);
+      });
+    }).on('error', reject);
+  });
+}
+
+// Başlanğıcda yüklə
+const YT_DLP = await downloadYtDlp();
 // ═══════════════════════════════════════════════════════════════════════════════
 // PREMIUM CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════════
