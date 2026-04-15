@@ -1,12 +1,23 @@
-services:
-  - type: web
-    name: video-downloader-api
-    runtime: node
-    buildCommand: npm install
-    startCommand: node index.js
-    envVars:
-      - key: NODE_ENV
-        value: production
-      - key: PORT
-        value: 3000
-    healthCheckPath: /api/health
+name: Build and Push Docker Image
+
+on:
+  push:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Build Docker Image
+      run: docker build -t myapp .
+    
+    - name: Save Image
+      run: docker save myapp > myapp.tar
+    
+    - name: Upload to Render
+      run: |
+        # Render.com webhook ilə deploy
+        curl -X POST https://api.render.com/v1/services/srv-XXXX/deploys \
+          -H "Authorization: Bearer ${{ secrets.RENDER_TOKEN }}"
