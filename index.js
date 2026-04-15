@@ -6,34 +6,51 @@ const execPromise = util.promisify(exec);
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const https = require('https');
 const axios = require('axios');
 
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// YENI: yt-dlp binary download (Render.com free tier üçün)
+// ═══════════════════════════════════════════════════════════════════════════════
 
-const https = require('https');
-const fs = require('fs');
+const YT_DLP_PATH = '/tmp/yt-dlp';
 
 async function downloadYtDlp() {
-  const path = '/tmp/yt-dlp';
-  if (fs.existsSync(path)) return path;
+  if (fs.existsSync(YT_DLP_PATH)) {
+    console.log('✅ yt-dlp already exists');
+    return YT_DLP_PATH;
+  }
+
+  console.log('📥 Downloading yt-dlp...');
   
   return new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(path);
-    https.get('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp', (res) => {
-      res.pipe(file);
+    const file = fs.createWriteStream(YT_DLP_PATH);
+    https.get('https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp', (response) => {
+      if (response.statusCode !== 200) {
+        reject(new Error(`Failed to download: ${response.statusCode}`));
+        return;
+      }
+      
+      response.pipe(file);
       file.on('finish', () => {
         file.close();
-        fs.chmodSync(path, 0o755);
-        resolve(path);
+        fs.chmodSync(YT_DLP_PATH, 0o755);
+        console.log('✅ yt-dlp downloaded successfully');
+        resolve(YT_DLP_PATH);
       });
-    }).on('error', reject);
+    }).on('error', (err) => {
+      fs.unlinkSync(YT_DLP_PATH);
+      reject(err);
+    });
   });
 }
 
-// Başlanğıcda yüklə
-const YT_DLP = await downloadYtDlp();
+// Global yt-dlp command
+let YT_DLP = 'yt-dlp'; // fallback
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // PREMIUM CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -335,7 +352,8 @@ async function getYouTubeInfoWithCookie(url, cookieString) {
   
   try {
     const cookieArg = cookieFile ? `--cookies "${cookieFile}"` : '';
-    const cmd = `yt-dlp ${cookieArg} --dump-json --no-playlist --socket-timeout 20 "${url}"`;
+    // YENI: Use YT_DLP variable instead of hardcoded 'yt-dlp'
+    const cmd = `${YT_DLP} ${cookieArg} --dump-json --no-playlist --socket-timeout 20 "${url}"`;
     
     const { stdout } = await execPromise(cmd, { 
       timeout: 30000,
@@ -354,7 +372,8 @@ async function getYouTubeInfoStrategic(url) {
   for (const strategy of strategies) {
     try {
       console.log(`🎯 Strategy: ${strategy.name}`);
-      const cmd = `yt-dlp ${strategy.args} --dump-json --no-playlist --socket-timeout 15 --user-agent "${getRandomUserAgent()}" "${url}"`;
+      // YENI: Use YT_DLP variable
+      const cmd = `${YT_DLP} ${strategy.args} --dump-json --no-playlist --socket-timeout 15 --user-agent "${getRandomUserAgent()}" "${url}"`;
       
       const { stdout } = await execPromise(cmd, { 
         timeout: 25000,
@@ -471,7 +490,8 @@ async function getTikTokInfoPremium(url) {
     for (const host of apiHosts) {
       try {
         const args = `--extractor-args "tiktok:api_hostname=${host}"`;
-        const cmd = `yt-dlp ${args} --dump-json --no-playlist --socket-timeout 15 --user-agent "${getRandomUserAgent()}" "${url}"`;
+        // YENI: Use YT_DLP variable
+        const cmd = `${YT_DLP} ${args} --dump-json --no-playlist --socket-timeout 15 --user-agent "${getRandomUserAgent()}" "${url}"`;
         
         const { stdout } = await execPromise(cmd, { 
           timeout: 25000,
@@ -548,7 +568,8 @@ function processTikTokData(data) {
 
 async function getInstagramInfoPremium(url) {
   return await smartRetry(async () => {
-    const cmd = `yt-dlp --dump-json --no-playlist --socket-timeout 20 --user-agent "${getRandomUserAgent()}" "${url}"`;
+    // YENI: Use YT_DLP variable
+    const cmd = `${YT_DLP} --dump-json --no-playlist --socket-timeout 20 --user-agent "${getRandomUserAgent()}" "${url}"`;
     
     const { stdout } = await execPromise(cmd, { 
       timeout: 30000,
@@ -617,7 +638,8 @@ function processInstagramData(data) {
 
 async function getUniversalInfo(url) {
   return await smartRetry(async () => {
-    const cmd = `yt-dlp --dump-json --no-playlist --socket-timeout 20 --user-agent "${getRandomUserAgent()}" "${url}"`;
+    // YENI: Use YT_DLP variable
+    const cmd = `${YT_DLP} --dump-json --no-playlist --socket-timeout 20 --user-agent "${getRandomUserAgent()}" "${url}"`;
     
     const { stdout } = await execPromise(cmd, { 
       timeout: 30000,
@@ -815,7 +837,21 @@ app.post('/api/direct-url', async (req, res) => {
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Premium Video Downloader API ${PORT} portunda işləyir`);
-  console.log(`📊 Features: 1080p DASH | Universal MP3 | Smart Retry | Parallel Invidious`);
-});
+// ═══════════════════════════════════════════════════════════════════════════════
+// START SERVER (with yt-dlp download)
+// ═══════════════════════════════════════════════════════════════════════════════
+
+(async () => {
+  try {
+    // Download yt-dlp before starting server
+    YT_DLP = await downloadYtDlp();
+    console.log(`✅ Using yt-dlp: ${YT_DLP}`);
+  } catch (e) {
+    console.log('⚠️ Failed to download yt-dlp, using system fallback');
+  }
+  
+  app.listen(PORT, () => {
+    console.log(`🚀 Premium Video Downloader API ${PORT} portunda işləyir`);
+    console.log(`📊 Features: 1080p DASH | Universal MP3 | Smart Retry | Parallel Invidious`);
+  });
+})();
