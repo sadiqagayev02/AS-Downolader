@@ -1,6 +1,3 @@
-// index.js - TƏKMILLƏŞDIRILMIŞ VERSIYA
-// Premium Snaptube-style features + 1080p DASH + Universal MP3
-
 const express = require('express');
 const cors = require('cors');
 const { exec } = require('child_process');
@@ -12,27 +9,21 @@ const crypto = require('crypto');
 const axios = require('axios');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const tmpDir = '/tmp/video-downloader';
-const audioDir = '/tmp/audio-downloader';
-const COOKIE_PATH = '/tmp/yt-cookies/youtube.txt';
+const PORT = process.env.PORT || 10000;
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PREMIUM CONFIGURATION
 // ═══════════════════════════════════════════════════════════════════════════════
 
 const CONFIG = {
-  // Fastest Invidious instances (premium selection)
   INVIDIOUS_INSTANCES: [
     'https://iv.datura.network',
     'https://iv.nboeck.de', 
     'https://iv.melmac.space',
     'https://vid.puffyan.us',
     'https://yt.artemislena.eu',
-    'https://iv.nboeck.de',
   ],
   
-  // Smart retry with exponential backoff
   RETRY: {
     maxAttempts: 3,
     baseDelay: 1000,
@@ -40,14 +31,12 @@ const CONFIG = {
     backoffMultiplier: 2,
   },
   
-  // Mobile User-Agent rotation (avoids bot detection)
   USER_AGENTS: [
     'Mozilla/5.0 (Linux; Android 14; SM-S918B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36',
     'Mozilla/5.0 (iPhone; CPU iPhone OS 17_1_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Mobile/15E148 Safari/604.1',
     'Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Mobile Safari/537.36',
   ],
   
-  // yt-dlp premium strategies for YouTube
   YT_STRATEGIES: [
     { name: 'tv_embedded', args: '--extractor-args "youtube:player_client=tv_embedded"' },
     { name: 'ios', args: '--extractor-args "youtube:player_client=ios"' },
@@ -58,10 +47,6 @@ const CONFIG = {
 
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
-
-fs.mkdirSync(tmpDir, { recursive: true });
-fs.mkdirSync(audioDir, { recursive: true });
-fs.mkdirSync('/tmp/yt-cookies', { recursive: true });
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // PREMIUM HELPERS
@@ -97,56 +82,6 @@ async function smartRetry(operation, context = '') {
   throw lastError;
 }
 
-// ─── Statik cookie setup ────────────────────────────────────────────────────
-if (process.env.YOUTUBE_COOKIE_BASE64) {
-  try {
-    const content = Buffer.from(process.env.YOUTUBE_COOKIE_BASE64, 'base64').toString('utf8');
-    fs.writeFileSync(COOKIE_PATH, content);
-    console.log('✅ Statik cookie yaradıldı');
-  } catch (e) {
-    console.log('⚠️ Statik cookie xətası:', e.message);
-  }
-}
-
-function getStaticCookieArg() {
-  try { fs.accessSync(COOKIE_PATH); return `--cookies "${COOKIE_PATH}"`; }
-  catch { return ''; }
-}
-
-// Flutter-dən gələn cookie string-i müvəqqəti fayla çevir
-function createTempCookieFile(cookieString, fileId) {
-  if (!cookieString || typeof cookieString !== 'string' || !cookieString.trim()) {
-    return null;
-  }
-  try {
-    const cookieFile = path.join('/tmp/yt-cookies', `flutter_${fileId}.txt`);
-    const lines = [
-      '# Netscape HTTP Cookie File',
-      '# Generated from Flutter app',
-      '',
-    ];
-
-    cookieString.split(';').forEach(pair => {
-      const eqIdx = pair.indexOf('=');
-      if (eqIdx === -1) return;
-      const name = pair.substring(0, eqIdx).trim();
-      const value = pair.substring(eqIdx + 1).trim();
-      if (!name) return;
-      lines.push(`.youtube.com\tTRUE\t/\tFALSE\t${Math.floor(Date.now()/1000)+86400*30}\t${name}\t${value}`);
-    });
-
-    fs.writeFileSync(cookieFile, lines.join('\n'));
-    return cookieFile;
-  } catch (e) {
-    return null;
-  }
-}
-
-function deleteTempFile(filePath) {
-  if (!filePath) return;
-  try { fs.unlinkSync(filePath); } catch (_) {}
-}
-
 function extractVideoId(url) {
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/shorts\/)([^&\n?#]+)/,
@@ -175,20 +110,54 @@ function sanitizeTitle(title) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PREMIUM YOUTUBE INFO - Parallel Invidious + Smart yt-dlp with DASH
+// COOKIE HELPERS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function createTempCookieFile(cookieString, fileId) {
+  if (!cookieString || typeof cookieString !== 'string' || !cookieString.trim()) {
+    return null;
+  }
+  try {
+    const cookieFile = path.join('/tmp', `yt_cookie_${fileId}.txt`);
+    const lines = [
+      '# Netscape HTTP Cookie File',
+      '',
+    ];
+
+    cookieString.split(';').forEach(pair => {
+      const eqIdx = pair.indexOf('=');
+      if (eqIdx === -1) return;
+      const name = pair.substring(0, eqIdx).trim();
+      const value = pair.substring(eqIdx + 1).trim();
+      if (!name) return;
+      lines.push(`.youtube.com\tTRUE\t/\tFALSE\t${Math.floor(Date.now()/1000)+86400*30}\t${name}\t${value}`);
+    });
+
+    fs.writeFileSync(cookieFile, lines.join('\n'));
+    return cookieFile;
+  } catch (e) {
+    return null;
+  }
+}
+
+function deleteTempFile(filePath) {
+  if (!filePath) return;
+  try { fs.unlinkSync(filePath); } catch (_) {}
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// PREMIUM YOUTUBE INFO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function getYouTubeInfoPremium(url, cookieString = null) {
   const videoId = extractVideoId(url);
   if (!videoId) throw new Error('Invalid YouTube URL');
 
-  // Try Invidious in parallel (fastest)
   const invidiousPromise = Promise.race([
     getInvidiousInfoParallel(videoId),
     new Promise((_, reject) => setTimeout(() => reject(new Error('Invidious timeout')), 8000))
   ]);
 
-  // Try yt-dlp with cookie
   const ytDlpPromise = cookieString 
     ? getYouTubeInfoWithCookie(url, cookieString)
     : getYouTubeInfoStrategic(url);
@@ -201,7 +170,6 @@ async function getYouTubeInfoPremium(url, cookieString = null) {
     ]);
     return result;
   } catch (err) {
-    // Sequential fallback
     try {
       return await getInvidiousInfoParallel(videoId);
     } catch (_) {
@@ -248,7 +216,6 @@ function processInvidiousData(data) {
   const qualities = [];
   const seen = new Set();
 
-  // Combined formats (720p and below)
   if (data.formatStreams) {
     for (const fmt of data.formatStreams) {
       if (!fmt.resolution || fmt.resolution === 'null') continue;
@@ -279,7 +246,6 @@ function processInvidiousData(data) {
     }
   }
 
-  // Adaptive formats for 1080p DASH
   if (data.adaptiveFormats) {
     const videoFormats = data.adaptiveFormats
       .filter(f => f.type?.includes('video') && f.url)
@@ -291,7 +257,6 @@ function processInvidiousData(data) {
     
     const bestAudio = audioFormats[0];
 
-    // 1080p DASH
     const v1080 = videoFormats.find(f => f.height >= 1080);
     if (v1080 && bestAudio && !seen.has('1080p Full HD')) {
       seen.add('1080p Full HD');
@@ -300,17 +265,16 @@ function processInvidiousData(data) {
         value: '1080',
         formatId: v1080.itag,
         url: v1080.url,
-        audioUrl: bestAudio.url, // YENI: Audio URL for DASH
+        audioUrl: bestAudio.url,
         filesize: (v1080.size ? parseInt(v1080.size) : 0) + (bestAudio.size ? parseInt(bestAudio.size) : 0),
         ext: 'mp4',
-        isDash: true, // YENI: Mark as DASH
+        isDash: true,
         needsMerge: true,
         source: 'invidious',
       });
     }
   }
 
-  // Audio only
   if (data.adaptiveFormats) {
     const audio = data.adaptiveFormats
       .filter(f => f.type?.includes('audio'))
@@ -347,7 +311,7 @@ async function getYouTubeInfoWithCookie(url, cookieString) {
   const cookieFile = createTempCookieFile(cookieString, fileId);
   
   try {
-    const cookieArg = cookieFile ? `--cookies "${cookieFile}"` : getStaticCookieArg();
+    const cookieArg = cookieFile ? `--cookies "${cookieFile}"` : '';
     const cmd = `yt-dlp ${cookieArg} --dump-json --no-playlist --socket-timeout 20 "${url}"`;
     
     const { stdout } = await execPromise(cmd, { 
@@ -394,7 +358,6 @@ function processYtDlpData(info) {
     .filter(f => f.acodec && f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none'))
     .sort((a, b) => (b.abr || 0) - (a.abr || 0))[0];
 
-  // Combined formats (720p and below)
   const combined = formats.filter(f => 
     f.vcodec && f.vcodec !== 'none' && 
     f.acodec && f.acodec !== 'none' &&
@@ -423,7 +386,6 @@ function processYtDlpData(info) {
     });
   }
 
-  // 1080p DASH
   const videoOnly = formats.filter(f => 
     f.vcodec && f.vcodec !== 'none' && 
     (!f.acodec || f.acodec === 'none') &&
@@ -438,16 +400,15 @@ function processYtDlpData(info) {
       value: '1080',
       formatId: v1080.format_id,
       url: v1080.url,
-      audioUrl: bestAudio.url, // YENI: Separate audio URL
+      audioUrl: bestAudio.url,
       filesize: (v1080.filesize || 0) + (bestAudio.filesize || 0),
       ext: v1080.ext || 'mp4',
-      isDash: true, // YENI: DASH format
+      isDash: true,
       needsMerge: true,
       source: 'ytdlp',
     });
   }
 
-  // Audio
   if (bestAudio) {
     qualities.push({
       label: 'MP3 (Audio)',
@@ -474,7 +435,7 @@ function processYtDlpData(info) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PREMIUM TIKTOK INFO - Cookie-siz, multi-strategy
+// TIKTOK INFO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function getTikTokInfoPremium(url) {
@@ -510,7 +471,6 @@ async function getTikTokInfoPremium(url) {
 function processTikTokData(data) {
   const qualities = [];
   
-  // Best video
   const bestVideo = data.formats?.find(f => 
     f.vcodec !== 'none' && f.height >= 720
   ) || data.formats?.[0];
@@ -530,7 +490,6 @@ function processTikTokData(data) {
     });
   }
 
-  // Audio (YENI: MP3 support for TikTok)
   const audio = data.formats?.find(f => 
     f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none')
   );
@@ -561,7 +520,7 @@ function processTikTokData(data) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// PREMIUM INSTAGRAM INFO - Cookie-siz
+// INSTAGRAM INFO
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function getInstagramInfoPremium(url) {
@@ -600,7 +559,6 @@ function processInstagramData(data) {
     });
   }
 
-  // Audio (YENI: MP3 support for Instagram)
   const audio = data.formats?.find(f => 
     f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none')
   );
@@ -631,7 +589,7 @@ function processInstagramData(data) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// UNIVERSAL WEB EXTRACTOR (YENI: Chrome/Brauzerdən hər hansı sayt)
+// UNIVERSAL WEB EXTRACTOR
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function getUniversalInfo(url) {
@@ -651,7 +609,6 @@ async function getUniversalInfo(url) {
 function processUniversalData(data, url) {
   const qualities = [];
   
-  // Video formats
   const videoFormats = data.formats?.filter(f => 
     f.vcodec !== 'none' && f.url
   ).sort((a, b) => (b.height || 0) - (a.height || 0)) || [];
@@ -672,7 +629,6 @@ function processUniversalData(data, url) {
     });
   }
 
-  // Audio (YENI: MP3 for any site)
   const audio = data.formats?.find(f => 
     f.acodec !== 'none' && (!f.vcodec || f.vcodec === 'none')
   );
@@ -734,7 +690,6 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// PREMIUM INFO ENDPOINT (YENI: Cookie support + all platforms)
 app.post('/api/info', async (req, res) => {
   const { url, cookieString } = req.body;
   
@@ -773,7 +728,6 @@ app.post('/api/info', async (req, res) => {
   }
 });
 
-// PREMIUM DIRECT URL ENDPOINT (YENI: Snaptube-style direct download)
 app.post('/api/direct-url', async (req, res) => {
   const { url, quality, formatId, cookieString, platform } = req.body;
   
@@ -788,7 +742,6 @@ app.post('/api/direct-url', async (req, res) => {
     let audioUrl = null;
 
     if (platform === 'youtube' || url.includes('youtube.com') || url.includes('youtu.be')) {
-      // YouTube with cookie
       if (cookieString && quality === 'audio') {
         const info = await getYouTubeInfoWithCookie(url, cookieString);
         const audioFormat = info.qualities.find(q => q.value === 'audio');
@@ -805,7 +758,6 @@ app.post('/api/direct-url', async (req, res) => {
         audioUrl = videoFormat?.audioUrl || null;
       }
     } else {
-      // Other platforms
       let info;
       if (url.includes('tiktok.com')) {
         info = await getTikTokInfoPremium(url);
@@ -838,34 +790,6 @@ app.post('/api/direct-url', async (req, res) => {
     console.error(`❌ /api/direct-url xətası: ${err.message}`);
     res.status(500).json({ success: false, error: err.message });
   }
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// HAZIRKI ENDPOINT-LƏR (Saxlanılır - dəyişmədim)
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Video download (hazırki kod - dəyişmədim)
-app.post('/api/download/start', async (req, res) => {
-  // Hazırki kodunuz burada qalır...
-  // (Sizin göndərdiyiniz index.js-dən kopyalayın)
-  res.json({ success: true, message: 'Use /api/direct-url for Snaptube-style' });
-});
-
-// Audio download (hazırki kod - dəyişmədim)  
-app.post('/api/audio/start', async (req, res) => {
-  // Hazırki kodunuz burada qalır...
-  res.json({ success: true, message: 'Use /api/direct-url for Snaptube-style' });
-});
-
-// File serving (hazırki kod - dəyişmədim)
-app.get('/api/download/file/:fileId', (req, res) => {
-  // Hazırki kodunuz burada qalır...
-  res.status(404).json({ error: 'Use direct download' });
-});
-
-app.get('/api/audio/file/:fileId', (req, res) => {
-  // Hazırki kodunuz burada qalır...
-  res.status(404).json({ error: 'Use direct download' });
 });
 
 app.listen(PORT, () => {
